@@ -5,12 +5,14 @@ import { CSpinner } from '@coreui/react'
 import Cookies from 'js-cookie'
 import './scss/style.scss'
 import PrivateRoute from './utils/PrivateRoute'
+import { setupAutoRefresh } from './components/autoRefresh';
 
 // Containers
 const DefaultLayout = React.lazy(() => import('./layout/DefaultLayout'))
 
 // Pages
 const Login = React.lazy(() => import('./views/pages/login/Login'))
+setupAutoRefresh();
 
 const App = () => {
   const { currentUser } = useSelector((state) => state.user) || {}
