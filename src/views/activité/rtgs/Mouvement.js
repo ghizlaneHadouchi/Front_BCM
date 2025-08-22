@@ -73,6 +73,9 @@ const Mouvement = () => {
   const mvsResByParticipantsAndStatus = getMvsResByParticipantsAndStatus()
   const { mvsResForTable, isTableLoading } = getRTGSForTable()
   const { participantsStats, isParticipantsStatsLoading } = getParticipantsStats(startDate, endDate)
+useEffect(() => {
+  console.log('🔎 participantsStats raw from backend:', participantsStats)
+}, [participantsStats])
 
   useEffect(() => {
     setFilteredMvs(mvsResForTable)
@@ -219,6 +222,94 @@ const Mouvement = () => {
     ],
     [],
   )
+  //Add this for Récapulatifs rtgs
+  // Ensure we always have an array
+// --- BEGIN robust normalizer for recap table ---
+
+// 1) Always have an array
+const participantsStatsSafe = Array.isArray(participantsStats)
+  ? participantsStats
+  : Array.isArray(participantsStats?.data)
+    ? participantsStats.data
+    : []
+
+// Helpers
+const pick = (obj, keys, fallback = undefined) => {
+  for (const k of keys) {
+    if (obj?.[k] !== undefined && obj?.[k] !== null) return obj[k]
+  }
+  return fallback
+}
+const toNum = (v, fb = 0) => {
+  if (v === undefined || v === null || v === '') return fb
+  if (typeof v === 'string') {
+    // accept "12.3%" or "1,234.56"
+    const cleaned = v.replace('%', '').replace(/,/g, '')
+    const n = Number(cleaned)
+    return Number.isFinite(n) ? n : fb
+  }
+  const n = Number(v)
+  return Number.isFinite(n) ? n : fb
+}
+
+// 2) Normalize rows to the column keys your table expects
+const participantsStatsNormalized = useMemo(() => {
+  return participantsStatsSafe.map((r) => {
+    // Try many likely API field names for each value:
+    const participant = pick(r, [
+      'participant', 't_from', 'emetteur', 'participantName', 'sender', 'bank', 'participant_code'
+    ], '-')
+
+    const nbr_transactions = toNum(pick(r, [
+      'nbr_transactions', 'nbrTransactions', 'total_transactions', 'totalCount', 'count'
+    ], 0))
+
+    const volume_transactions = toNum(pick(r, [
+      'volume_transactions', 'volumeTransactions', 'total_volume', 'volume', 'sumAmount', 'amountSum'
+    ], 0))
+
+    const nbr_failed_transactions = toNum(pick(r, [
+      'nbr_failed_transactions', 'nbrFailedTransactions', 'failed_transactions', 'failedCount'
+    ], 0))
+
+    const volume_failed_transactions = toNum(pick(r, [
+      'volume_failed_transactions', 'volumeFailedTransactions', 'failed_volume', 'failedVolume'
+    ], 0))
+
+    // Percentages may arrive as numbers or "%" strings, or be absent.
+    // If absent, we’ll default to 0 (you can compute them later if you know totals).
+    const pct_transactions = toNum(pick(r, [
+      'pct_transactions', 'pctTransactions', 'percentage_transactions', 'pct'
+    ], 0))
+
+    const pct_volume_transactions = toNum(pick(r, [
+      'pct_volume_transactions', 'pctVolumeTransactions', 'percentage_volume', 'pctVolume'
+    ], 0))
+
+    const pct_failed_transactions = toNum(pick(r, [
+      'pct_failed_transactions', 'pctFailedTransactions', 'percentage_failed', 'pctFailed'
+    ], 0))
+
+    return {
+      participant,
+      nbr_transactions,
+      pct_transactions,
+      volume_transactions,
+      pct_volume_transactions,
+      nbr_failed_transactions,
+      pct_failed_transactions,
+      volume_failed_transactions,
+    }
+  })
+}, [participantsStatsSafe])
+
+// (Optional) Quick debug: uncomment to verify what the API sends
+// useEffect(() => {
+//   console.log('participantsStats sample row:', participantsStatsSafe?.[0])
+// }, [participantsStatsSafe])
+
+// --- END robust normalizer for recap table ---
+
 
   const {
     getTableProps,
@@ -245,7 +336,7 @@ const Mouvement = () => {
           ? filteredMvs
           : shownData === 'graph'
             ? sortedData
-            : participantsStats,
+            : participantsStatsNormalized,
       initialState: { pageIndex: 0, pageSize: 12 },
     },
     usePagination,
@@ -271,57 +362,124 @@ const Mouvement = () => {
     setFilteredMvs(filtered)
   }
 
-  const basicLineChartData = useMemo(
-    () => ({
-      xAxisData: mvsResByMonth.map((d) => d.month_year).sort((a, b) => new Date(a) - new Date(b)),
-      seriesData: mvsResByMonth.map((d) => d.count),
-    }),
-    [mvsResByMonth],
-  )
+// Replace the whole basicLineChartData block with this:
+const basicLineChartData = useMemo(() => {
+  const rows = Array.isArray(mvsResByMonth) ? mvsResByMonth : []
 
-  const stackedLineData = useMemo(() => {
-    const xAxisData = [...new Set(mvsResByParticipantsAndMonth.map((d) => d.month_year))].sort(
-      (a, b) => new Date(a) - new Date(b),
-    )
-
-    const legendData = [...new Set(mvsResByParticipantsAndMonth.map((i) => i.t_from))]
-
-    const seriesData = legendData.map((t_from) => ({
-      name: t_from,
-      type: 'line',
-      stack: 'Total',
-      data: xAxisData.map((month_year) =>
-        mvsResByParticipantsAndMonth
-          .filter((i) => i.t_from === t_from && i.month_year === month_year)
-          .reduce((sum, i) => sum + i.count, 0),
-      ),
+  // normalize: accept many possible field names
+  const items = rows
+    .map(r => ({
+      // month label can be month_year, monthYear, month, label, etc.
+      month: r.month_year ?? r.monthYear ?? r.month ?? r.label ?? r.period ?? null,
+      // y value can be count / total / value
+      count: Number(r.count ?? r.total ?? r.value ?? 0),
     }))
+    .filter(it => it.month !== null)
 
-    return { xAxisData, legendData, seriesData }
-  }, [mvsResByParticipantsAndMonth])
+  // sort: if month labels are numeric-like ("400"), sort numerically;
+  // otherwise try date sort, and fall back to string sort
+  const isNumeric = items.every(it => /^\d+$/.test(String(it.month)))
+  items.sort((a, b) => {
+    if (isNumeric) return Number(a.month) - Number(b.month)
+    const da = new Date(a.month)
+    const db = new Date(b.month)
+    if (!isNaN(da) && !isNaN(db)) return da - db
+    return String(a.month).localeCompare(String(b.month))
+  })
 
-  const { xAxisData1, data1 } = useMemo(() => {
-    const xAxisData = mvsResByParticipantsAndStatus.map((i) => i.t_from)
+  return {
+    xAxisData: items.map(it => String(it.month)),
+    seriesData: items.map(it => it.count),
+  }
+}, [mvsResByMonth])
 
-    const data = ['total_item_count', 'non_resolved_count'].map((key, index) => ({
-      name: ['Total Mouvement de Réserve', 'Mouvement de Réserve Non Résolus'][index],
-      values: mvsResByParticipantsAndStatus.map((i) => i[key]),
-      color: ['#5c74cc', '#e66a68'][index],
+
+const stackedLineData = useMemo(() => {
+  const raw = Array.isArray(mvsResByParticipantsAndMonth)
+    ? mvsResByParticipantsAndMonth
+    : [];
+
+  // 1) Normalize keys from backend -> local shape
+  //    (works for monthYear or month_year, tfrom or t_from)
+  const norm = raw
+    .map(r => ({
+      month: r.month_year ?? r.monthYear ?? r.month ?? null,
+      from:  r.t_from     ?? r.tfrom     ?? r.participant ?? null,
+      count: Number(r.count ?? r.total ?? r.value ?? 0),
     }))
+    .filter(r => r.month !== null && r.from !== null);
 
-    return { xAxisData1: xAxisData, data1: data }
-  }, [mvsResByParticipantsAndStatus])
+  // 2) Build x-axis (unique months) with robust sort:
+  const months = [...new Set(norm.map(d => d.month))];
+  const isNumeric = months.every(m => /^\d+$/.test(String(m)));
+  const xAxisData = months.sort((a, b) => {
+    if (isNumeric) return Number(a) - Number(b);
+    const da = new Date(a), db = new Date(b);
+    if (!isNaN(da) && !isNaN(db)) return da - db;
+    return String(a).localeCompare(String(b));
+  });
 
-  const pieChartData = useMemo(
-    () =>
-      mvsResByParticipantsAndStatus.map((i) => {
-        return {
-          value: i.total_item_count,
-          name: i.t_from,
-        }
-      }),
-    [mvsResByParticipantsAndStatus],
-  )
+  // 3) Legend = unique participants
+  const legendData = [...new Set(norm.map(i => i.from))];
+
+  // 4) Series per participant aligned on x-axis order
+  const seriesData = legendData.map((name) => {
+    const values = xAxisData.map((m) =>
+      norm
+        .filter(i => i.from === name && i.month === m)
+        .reduce((sum, i) => sum + i.count, 0)
+    );
+    return { name, type: 'line', stack: 'Total', data: values };
+  });
+
+  return { xAxisData, legendData, seriesData };
+}, [mvsResByParticipantsAndMonth]);
+
+
+
+ const { xAxisData1, data1 } = useMemo(() => {
+  const rows = Array.isArray(mvsResByParticipantsAndStatus)
+    ? mvsResByParticipantsAndStatus
+    : [];
+
+  // normalize participant name
+  const xAxisData = rows.map(
+    (i) => i.t_from ?? i.tfrom ?? i.participant ?? i.sender ?? "-"
+  );
+
+  // normalize counts
+  const totalCounts = rows.map((i) => Number(i.total_item_count ?? i.total ?? i.count ?? 0));
+  const nonResolvedCounts = rows.map((i) => Number(i.non_resolved_count ?? i.failed ?? 0));
+
+  const data = [
+    {
+      name: "Total Mouvement de Réserve",
+      values: totalCounts,
+      color: "#5c74cc",
+    },
+    {
+      name: "Mouvement de Réserve Non Résolus",
+      values: nonResolvedCounts,
+      color: "#e66a68",
+    },
+  ];
+
+  return { xAxisData1: xAxisData, data1: data };
+}, [mvsResByParticipantsAndStatus]);
+
+
+const pieChartData = useMemo(() => {
+  const rows = Array.isArray(mvsResByParticipantsAndStatus)
+    ? mvsResByParticipantsAndStatus
+    : [];
+
+  // Normalize fields from backend -> Pie series items
+  return rows.map((i) => ({
+    value: Number(i.total_item_count ?? i.total ?? i.count ?? 0),
+    name: i.t_from ?? i.tfrom ?? i.participant ?? "-",
+  }));
+}, [mvsResByParticipantsAndStatus]);
+
 
   const clearInputs = () => {
     setFormData({
@@ -343,10 +501,16 @@ const Mouvement = () => {
   }
 
   const handleSubmit = async () => {
+  console.log("🚀 JSON envoyé au backend:", formData)   // 👈 ajout console
+  try {
     await createMvsRTGS(formData)
     setIsAddModalOpen(false)
     clearInputs()
+  } catch (err) {
+    console.error("❌ Erreur lors de l'envoi:", err)
   }
+}
+
 
   const handleChangeFilter = (e) => {
     const { name, value } = e.target
@@ -478,11 +642,12 @@ const Mouvement = () => {
             <div className={`card-content ${isMainCardOpen ? 'open' : ''}`}>
               <CRow>
                 <CCol xs={4}>
+
                   <Kpi
                     title="Transactions moyennes par mois"
                     data={metrics.avgTransactionPerMonth}
                   />
-                  <Kpi title="Total Transactions" data={metrics.totalTransactions} />
+                  <Kpi title="Total Transactions" data={String(metrics.totalTransactions)} />
                 </CCol>
                 <CCol xs={4}>
                   <Kpi
@@ -493,7 +658,7 @@ const Mouvement = () => {
                 </CCol>
                 <CCol xs={4}>
                   <Kpi title="Transactions échouées" data={`${metrics.percentageFailed} %`} />
-                  <Kpi title="Total Rejetés" data={metrics.totalRejected} />
+                  <Kpi title="Total Rejetés" data={String(metrics.totalRejected)} />
                 </CCol>
               </CRow>
               <div>

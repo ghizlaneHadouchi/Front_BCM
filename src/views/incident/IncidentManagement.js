@@ -82,50 +82,72 @@ const IncidentManagement = () => {
   const incidentsBySystem = getIncidentsBySystem()
   const totalIncidentsByPartipants = getTotalIncidentsAndNonResolvedByParticipants()
   const { incidents, isTableLoading } = getAllIncidents()
+  //add
+  // -- Helpers robustes --
+const toArray = (val) => {
+  if (Array.isArray(val)) return val
+  if (val && typeof val === 'object') {
+    for (const k of Object.keys(val)) {
+      if (Array.isArray(val[k])) return val[k]
+    }
+  }
+  return []
+}
 
-  const severityLevelPieChartData = useMemo(
-    () =>
-      incidentsBySeverityLevel.map((i) => {
-        return {
-          value: i.count,
-          name: i.SeverityLevel,
-        }
-      }),
-    [incidentsBySeverityLevel],
-  )
+const toNum = (v, fb = 0) => {
+  if (v === undefined || v === null || v === '') return fb
+  if (typeof v === 'string') {
+    const cleaned = v.replace(/\u00A0/g, ' ').replace(/[^\d.\-]/g, '')
+    const n = Number(cleaned)
+    return Number.isFinite(n) ? n : fb
+  }
+  const n = Number(v)
+  return Number.isFinite(n) ? n : fb
+}
 
-  const statusPieChartData = useMemo(
-    () =>
-      incidentsByStatus.map((i) => {
-        return {
-          value: i.count,
-          name: i.Status,
-        }
-      }),
-    [incidentsByStatus],
-  )
+  //and
 
-  const systemPieChartData = useMemo(
-    () =>
-      incidentsBySystem.map((i) => {
-        return {
-          value: i.count,
-          name: i.System,
-        }
-      }),
-    [incidentsBySystem],
-  )
+ const severityLevelPieChartData = useMemo(() => {
+  const rows = toArray(incidentsBySeverityLevel)
+  return rows
+    .map(r => ({
+      name: r.SeverityLevel ?? r.severityLevel ?? r.severity_level ?? r.level ?? '-',
+      value: toNum(r.count ?? r.total ?? r.value ?? r.nb ?? 0),
+    }))
+    .filter(i => i.name !== '-' && i.value > 0)
+}, [incidentsBySeverityLevel])
 
-  const participantsPieChartData = useMemo(
-    () =>
-      totalIncidentsByPartipants.map((i) => {
-        return {
-          value: i.total_incidents,
-          name: i.reportedBy,
-        }
-      }),
-    [totalIncidentsByPartipants],
-  )
+
+  const statusPieChartData = useMemo(() => {
+  const rows = toArray(incidentsByStatus)
+  return rows
+    .map(r => ({
+      name: r.Status ?? r.status ?? r.etat ?? '-',
+      value: toNum(r.count ?? r.total ?? r.value ?? r.nb ?? 0),
+    }))
+    .filter(i => i.name !== '-' && i.value > 0)
+}, [incidentsByStatus])
+
+  const systemPieChartData = useMemo(() => {
+  const rows = toArray(incidentsBySystem)
+  return rows
+    .map(r => ({
+      name: r.System ?? r.system ?? r.app ?? r.application ?? '-',
+      value: toNum(r.count ?? r.total ?? r.value ?? r.nb ?? 0),
+    }))
+    .filter(i => i.name !== '-' && i.value > 0)
+}, [incidentsBySystem])
+
+  const participantsPieChartData = useMemo(() => {
+  const rows = toArray(totalIncidentsByPartipants)
+  return rows
+    .map(r => ({
+      name: r.reportedBy ?? r.ReportedBy ?? r.participant ?? r.t_from ?? r.tfrom ?? '-',
+      value: toNum(r.total_incidents ?? r.count ?? r.total ?? 0),
+    }))
+    .filter(i => i.name !== '-' && i.value > 0)
+}, [totalIncidentsByPartipants])
+
 
   const clearCorrectionInputs = () => {
     setCorrectionData({
